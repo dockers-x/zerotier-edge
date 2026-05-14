@@ -19,3 +19,4 @@ services:
 
 volumes:
   zerotier-edge-data:
+    name: zerotier-edge-data
