@@ -1,0 +1,151 @@
+name: Docker Build and Push
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream zerotier-edge release tag. Leave empty to use latest."
+        required: false
+        type: string
+  schedule:
+    - cron: "23 */6 * * *"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: mokeyish/zerotier-edge
+  DOCKERHUB_IMAGE: czyt/zerotier-edge
+  GHCR_IMAGE: ghcr.io/${{ github.repository }}
+  PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  docker:
+    name: Build and push Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Resolve upstream release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${REQUESTED_TAG}" ]; then
+            tag="${REQUESTED_TAG}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="$(
+              curl -fsSL \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" \
+              | jq -r '.tag_name'
+            )"
+          fi
+
+          if [ -z "${tag}" ] || [ "${tag}" = "null" ]; then
+            echo "Unable to resolve upstream release tag" >&2
+            exit 1
+          fi
+
+          case "${tag}" in
+            v*) ;;
+            *) tag="v${tag}" ;;
+          esac
+
+          {
+            echo "tag=${tag}"
+            echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check whether release image already exists
+        id: existing
+        run: |
+          set -euo pipefail
+
+          if docker buildx imagetools inspect "${GHCR_IMAGE}:${{ steps.release.outputs.tag }}" >/dev/null 2>&1 \
+            && docker buildx imagetools inspect "${DOCKERHUB_IMAGE}:${{ steps.release.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.DOCKERHUB_IMAGE }}
+            ${{ env.GHCR_IMAGE }}
+          tags: |
+            type=raw,value=${{ steps.release.outputs.tag }}
+            type=semver,pattern={{version}},value=${{ steps.release.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.release.outputs.tag }}
+            type=semver,pattern={{major}},value=${{ steps.release.outputs.tag }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=zerotier-edge
+            org.opencontainers.image.description=Docker image for mokeyish/zerotier-edge release binaries
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.vendor=${{ github.repository_owner }}
+            org.opencontainers.image.version=${{ steps.release.outputs.tag }}
+            org.opencontainers.image.created=${{ steps.release.outputs.created }}
+
+      - name: Build and push Docker image
+        if: github.event_name != 'schedule' || steps.existing.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          build-args: |
+            ZEROTIER_EDGE_VERSION=${{ steps.release.outputs.tag }}
+            VERSION=${{ steps.release.outputs.tag }}
+            BUILD_TIME=${{ steps.release.outputs.created }}
+            GIT_COMMIT=${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Skip unchanged scheduled build
+        if: github.event_name == 'schedule' && steps.existing.outputs.exists == 'true'
+        run: |
+          echo "Images ${GHCR_IMAGE}:${{ steps.release.outputs.tag }} and ${DOCKERHUB_IMAGE}:${{ steps.release.outputs.tag }} already exist; nothing to build."

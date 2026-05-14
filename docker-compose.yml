@@ -1,0 +1,17 @@
+services:
+  zerotier-edge:
+    image: ghcr.io/dockers-x/zerotier-edge:latest
+    container_name: zerotier-edge
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/lib/zerotier-one:/var/lib/zerotier-one
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9394"
+      - --zt-api
+      - http://127.0.0.1:9993
+      - --work-dir
+      - /var/lib/zerotier-one
