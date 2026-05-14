@@ -5,7 +5,8 @@ services:
     restart: unless-stopped
     network_mode: host
     volumes:
-      - /var/lib/zerotier-one:/var/lib/zerotier-one
+      - zerotier-edge-data:/data
+      - /var/lib/zerotier-one/authtoken.secret:/data/authtoken.secret:ro
     command:
       - --host
       - 0.0.0.0
@@ -14,4 +15,7 @@ services:
       - --zt-api
       - http://127.0.0.1:9993
       - --work-dir
-      - /var/lib/zerotier-one
+      - /data
+
+volumes:
+  zerotier-edge-data:

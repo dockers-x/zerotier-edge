@@ -44,12 +44,12 @@ LABEL org.opencontainers.image.title="zerotier-edge" \
       org.opencontainers.image.licenses="GPL-3.0"
 
 RUN apk add --no-cache ca-certificates \
-    && mkdir -p /var/lib/zerotier-one
+    && mkdir -p /data
 
 COPY --from=downloader /usr/local/bin/zerotier-edge /usr/local/bin/zerotier-edge
 
 EXPOSE 9394
-VOLUME ["/var/lib/zerotier-one"]
+VOLUME ["/data"]
 
 ENTRYPOINT ["/usr/local/bin/zerotier-edge"]
-CMD ["--host", "0.0.0.0", "--port", "9394", "--zt-api", "http://127.0.0.1:9993", "--work-dir", "/var/lib/zerotier-one"]
+CMD ["--host", "0.0.0.0", "--port", "9394", "--zt-api", "http://127.0.0.1:9993", "--work-dir", "/data"]
